@@ -1,5 +1,4 @@
-
-local "ru" = nil
+local ru = nil
 print("Thunder Hub MM2 Loading...")
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 function missing(expectedType, value, defaultValue)
