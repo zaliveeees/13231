@@ -1,6 +1,6 @@
 local ru = nil
 print("Thunder Hub MM2 Loading...")
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/shlexware/Orion/main/source"))()
 function missing(expectedType, value, defaultValue)
     if type(value) ~= expectedType then
         return defaultValue
