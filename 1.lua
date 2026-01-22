@@ -1,4 +1,3 @@
-
 -- Load UI Library
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
@@ -43,6 +42,7 @@ local Colors = {
     Innocent = Color3.fromHex("#39FF14"),
     Sheriff = Color3.fromHex("#001e80"),
     Murder = Color3.fromHex("#e80909"),
+    Yellow = Color3.fromHex("#FFFF00"),
 }
 
 -- ============================================
@@ -193,13 +193,15 @@ end
 
 CheckGamepass()
 
--- ESP Variables
+-- ESP Variables (ИСПРАВЛЕННЫЕ)
 local murdererFound = false
 local sheriffFound = false
 local espFilters = {"Esp All"}
 local highlightEnabled = true
 local lineESPEnabled = false
 local lineESPObjects = {}
+local characterHighlights = {}
+local espUpdateConnection = nil
 local selectedWeaponName = ""
 local dupeAmount = 1
 local fromWeapon = ""
@@ -228,88 +230,116 @@ local CharacterStats = {
 }
 
 -- ============================================
--- HELPER FUNCTIONS
+-- ESP ФУНКЦИИ (ИСПРАВЛЕННЫЕ)
 -- ============================================
 
--- Get Player Role
+-- Обновленная функция получения роли
 local function GetPlayerRole(player)
-    local char = player.Character
-    if not char then return nil end
+    if not player or not player.Character then return nil end
     
+    local char = player.Character
     local backpack = player:FindFirstChild("Backpack")
     
-    -- Check for Knife (Murderer)
-    if char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife")) then
+    -- Проверяем нож (Убийца)
+    if char:FindFirstChild("Knife") then
+        return "Murderer"
+    elseif backpack and backpack:FindFirstChild("Knife") then
         return "Murderer"
     end
     
-    -- Check for Gun (Sheriff)
-    if char:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun")) then
+    -- Проверяем пушку (Шериф)
+    if char:FindFirstChild("Gun") then
         return "Sheriff"
+    elseif backpack and backpack:FindFirstChild("Gun") then
+        return "Sheriff"
+    end
+    
+    -- Проверяем через игровые данные
+    local success, playerData = pcall(function()
+        return ReplicatedStorage:FindFirstChild("GetPlayerData", true):InvokeServer()
+    end)
+    
+    if success and playerData then
+        local data = playerData[player.Name]
+        if data and data.Role then
+            return data.Role
+        end
     end
     
     return "Innocent"
 end
 
--- Check if player should be highlighted
+-- Обновленная функция проверки подсветки
 local function ShouldHighlightPlayer(player, filters)
+    if player == LocalPlayer then return false end
+    if not player.Character then return false end
+    
     local role = GetPlayerRole(player)
     if not role then return false end
     
-    if table.find(filters, "Esp All") then
-        return true
-    end
-    
-    if table.find(filters, "Esp Murder") and role == "Murderer" then
-        return true
-    end
-    
-    if table.find(filters, "Esp Sheriff") and role == "Sheriff" then
-        return true
-    end
-    
-    if table.find(filters, "Esp Sheriff / Murder") and (role == "Sheriff" or role == "Murderer") then
-        return true
+    for _, filter in ipairs(filters) do
+        if filter == "Esp All" then
+            return true
+        elseif filter == "Esp Murder" and role == "Murderer" then
+            return true
+        elseif filter == "Esp Sheriff" and role == "Sheriff" then
+            return true
+        elseif filter == "Esp Sheriff / Murder" and (role == "Sheriff" or role == "Murderer") then
+            return true
+        end
     end
     
     return false
 end
 
--- Create Highlight
+-- Обновленная функция создания подсветки
 local function CreateHighlight(character, color)
-    local highlight = character:FindFirstChild("RoleHighlight")
+    if not character or not character:IsDescendantOf(workspace) then return nil end
+    
+    local highlight = characterHighlights[character]
     
     if not highlight then
         highlight = Instance.new("Highlight")
         highlight.Name = "RoleHighlight"
         highlight.FillTransparency = 0.5
-        highlight.OutlineTransparency = 1
+        highlight.OutlineTransparency = 0
+        highlight.OutlineColor = Color3.new(0, 0, 0)
         highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
         highlight.Adornee = character
-        highlight.Parent = character
+        highlight.Parent = CoreGui
+        
+        characterHighlights[character] = highlight
     end
     
     highlight.FillColor = color
+    highlight.Enabled = true
+    
+    return highlight
 end
 
--- Remove Highlight
+-- Обновленная функция удаления подсветки
 local function RemoveHighlight(character)
-    local highlight = character:FindFirstChild("RoleHighlight")
-    if highlight then
-        highlight:Destroy()
+    if characterHighlights[character] then
+        characterHighlights[character]:Destroy()
+        characterHighlights[character] = nil
     end
 end
 
--- Create Line ESP
+-- Обновленная функция создания Line ESP
 local function CreateLineESP(player, color)
+    if lineESPObjects[player] then
+        lineESPObjects[player]:Remove()
+    end
+    
     local line = Drawing.new("Line")
     line.Thickness = 2
-    line.Color = color or Color3.new(1, 1, 1)
-    line.Transparency = 1
+    line.Color = color
+    line.Visible = true
+    line.ZIndex = 1
     lineESPObjects[player] = line
 end
 
--- Remove Line ESP
+-- Обновленная функция удаления Line ESP
 local function RemoveLineESP(player)
     if lineESPObjects[player] then
         lineESPObjects[player]:Remove()
@@ -317,80 +347,163 @@ local function RemoveLineESP(player)
     end
 end
 
--- Update All ESP
+-- Обновленная функция обновления Line ESP
+local function UpdateLineESP()
+    if not lineESPEnabled then return end
+    
+    for player, line in pairs(lineESPObjects) do
+        if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local rootPart = player.Character.HumanoidRootPart
+            local position, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+            
+            if onScreen then
+                line.Visible = true
+                line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                line.To = Vector2.new(position.X, position.Y)
+                
+                local role = GetPlayerRole(player)
+                if role == "Murderer" then
+                    line.Color = Colors.Blood
+                elseif role == "Sheriff" then
+                    line.Color = Colors.Toxic
+                else
+                    line.Color = Colors.Innocent
+                end
+            else
+                line.Visible = false
+            end
+        else
+            line.Visible = false
+        end
+    end
+end
+
+-- Обновленная функция обновления ESP
 local function UpdateESP()
     murdererFound = false
     sheriffFound = false
     
-    -- Find roles
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local role = GetPlayerRole(player)
-            if role == "Murderer" then
-                murdererFound = true
-            end
-            if role == "Sheriff" then
-                sheriffFound = true
-            end
-        end
-    end
-    
-    -- Update ESP for each player
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local role = GetPlayerRole(player)
-            local shouldHighlight = ShouldHighlightPlayer(player, espFilters)
-            local highlightColor = nil
-            
-            -- Update Highlight ESP
-            if highlightEnabled then
+    -- Обновляем подсветку
+    if highlightEnabled then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local shouldHighlight = ShouldHighlightPlayer(player, espFilters)
+                local role = GetPlayerRole(player)
+                local highlightColor = Colors.Innocent
+                
                 if shouldHighlight then
                     if role == "Murderer" then
                         highlightColor = Colors.Blood
+                        murdererFound = true
                     elseif role == "Sheriff" then
-                        highlightColor = Colors.Toxic or Colors.Orange
+                        highlightColor = Colors.Toxic
+                        sheriffFound = true
                     end
                     
                     CreateHighlight(player.Character, highlightColor)
                 else
                     RemoveHighlight(player.Character)
                 end
-            else
-                RemoveHighlight(player.Character)
             end
-            
-            -- Update Line ESP
-            if lineESPEnabled and shouldHighlight then
-                if role == "Murderer" then
-                    highlightColor = Colors.Blood
-                elseif role == "Sheriff" then
-                    highlightColor = Colors.Toxic or Colors.Orange
-                end
+        end
+        
+        -- Удаляем подсветки у игроков которые вышли
+        for character, highlight in pairs(characterHighlights) do
+            if not character:IsDescendantOf(workspace) then
+                RemoveHighlight(character)
+            end
+        end
+    else
+        -- Отключаем все подсветки
+        for character, highlight in pairs(characterHighlights) do
+            highlight:Destroy()
+        end
+        characterHighlights = {}
+    end
+    
+    -- Обновляем Line ESP
+    if lineESPEnabled then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local shouldHighlight = ShouldHighlightPlayer(player, espFilters)
                 
-                if not lineESPObjects[player] then
-                    CreateLineESP(player, highlightColor)
+                if shouldHighlight then
+                    local role = GetPlayerRole(player)
+                    local lineColor = Colors.Innocent
+                    
+                    if role == "Murderer" then
+                        lineColor = Colors.Blood
+                    elseif role == "Sheriff" then
+                        lineColor = Colors.Toxic
+                    end
+                    
+                    if not lineESPObjects[player] then
+                        CreateLineESP(player, lineColor)
+                    end
                 else
-                    lineESPObjects[player].Color = highlightColor
+                    RemoveLineESP(player)
                 end
-            else
+            end
+        end
+        
+        -- Удаляем Line ESP у игроков которые вышли
+        for player, line in pairs(lineESPObjects) do
+            if not Players:FindFirstChild(player.Name) then
                 RemoveLineESP(player)
             end
         end
+        
+        UpdateLineESP()
+    else
+        -- Удаляем все Line ESP
+        for player, line in pairs(lineESPObjects) do
+            line:Remove()
+        end
+        lineESPObjects = {}
     end
 end
 
--- Apply Character Stats
-local function ApplyCharacterStats()
-    local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        if not CharacterStats.WalkSpeed.Locked then
-            humanoid.WalkSpeed = CharacterStats.WalkSpeed.Value
-        end
-        if not CharacterStats.JumpPower.Locked then
-            humanoid.JumpPower = CharacterStats.JumpPower.Value
-        end
+-- Функция запуска обновления ESP
+local function StartESPUpdate()
+    if espUpdateConnection then
+        espUpdateConnection:Disconnect()
     end
+    
+    espUpdateConnection = RunService.RenderStepped:Connect(function()
+        UpdateESP()
+    end)
 end
+
+-- Функция остановки ESP
+local function StopESP()
+    if espUpdateConnection then
+        espUpdateConnection:Disconnect()
+        espUpdateConnection = nil
+    end
+    
+    -- Очищаем все подсветки
+    for character, highlight in pairs(characterHighlights) do
+        highlight:Destroy()
+    end
+    characterHighlights = {}
+    
+    -- Очищаем все линии
+    for player, line in pairs(lineESPObjects) do
+        line:Remove()
+    end
+    lineESPObjects = {}
+end
+
+-- Автоматически обновлять ESP при появлении игроков
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        UpdateESP()
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    UpdateESP()
+end)
 
 -- ============================================
 -- TELEPORT/FLING FUNCTION
@@ -1500,6 +1613,19 @@ local function AutoResetCharacter()
     end
 end
 
+-- Apply Character Stats
+local function ApplyCharacterStats()
+    local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        if not CharacterStats.WalkSpeed.Locked then
+            humanoid.WalkSpeed = CharacterStats.WalkSpeed.Value
+        end
+        if not CharacterStats.JumpPower.Locked then
+            humanoid.JumpPower = CharacterStats.JumpPower.Value
+        end
+    end
+end
+
 -- ============================================
 -- GUI SETUP
 -- ============================================
@@ -1511,7 +1637,7 @@ local MainSection = Window:Section({
 })
 
 -- ============================================
--- ESP TAB
+-- ESP TAB (ИСПРАВЛЕННЫЙ)
 -- ============================================
 
 local ESPTab = MainSection:Tab({
@@ -1533,7 +1659,9 @@ ESPTab:Toggle({
     Callback = function(value)
         highlightEnabled = value
         if value then
-            espFilters = {"Esp All"}
+            StartESPUpdate()
+        else
+            StopESP()
         end
         UpdateESP()
     end,
@@ -1567,13 +1695,32 @@ ESPTab:Toggle({
     Default = false,
     Callback = function(value)
         lineESPEnabled = value
-        if not value then
+        if value then
+            UpdateESP()
+        else
             for _, line in pairs(lineESPObjects) do
                 line:Remove()
             end
             lineESPObjects = {}
         end
+    end,
+})
+
+ESPTab:Space()
+
+ESPTab:Button({
+    Title = "Refresh ESP",
+    Icon = "refresh-cw",
+    Color = Colors.Blue,
+    Justify = "Center",
+    Callback = function()
         UpdateESP()
+        WindUI:Notify({
+            Title = "ESP Refreshed",
+            Content = "ESP updated for all players",
+            Icon = "check-circle",
+            Duration = 2,
+        })
     end,
 })
 
@@ -1725,7 +1872,7 @@ AutoFarmTab:Slider({
 AutoFarmTab:Space()
 
 AutoFarmTab:Section({
-    Title = "âš ï¸ Recommended: 25, higher will probably get you kicked",
+    Title = "⚠️ Recommended: 25, higher will probably get you kicked",
     TextSize = 14,
     TextTransparency = 0.3,
     FontWeight = Enum.FontWeight.Medium,
@@ -2895,3 +3042,21 @@ InfoTab:Button({
         })
     end,
 })
+
+-- ============================================
+-- INITIALIZE ESP
+-- ============================================
+
+-- Запускаем ESP при старте
+task.wait(2)
+if highlightEnabled then
+    StartESPUpdate()
+end
+
+-- Автоматически обновляем ESP
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    UpdateESP()
+end)
+
+print("[Nero Script] ESP system initialized and running!")
